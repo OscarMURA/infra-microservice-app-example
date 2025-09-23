@@ -49,5 +49,25 @@ pipeline {
         }
       }
     }
+
+    stage("Smoke Docker en VM"){
+      when { anyOf { branch "main"; branch "infra/main" } }
+      steps {
+        withCredentials([string(credentialsId: 'deploy-password', variable: 'DEPLOY_PASSWORD')]) {
+          sh '''
+            set -e
+            IP=$(awk -F= '/DROPLET_IP/ {print $2}' droplet.properties)
+            [ -n "$IP" ] || { echo "No DROPLET_IP"; exit 1; }
+            export SSHPASS="$DEPLOY_PASSWORD"
+            sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" '
+              docker --version &&
+              docker compose version &&
+              id -nG deploy | grep -q docker &&
+              test -d /opt/microservice-app || exit 1
+            '
+          '''
+        }
+      }
+    }
   }
 }
