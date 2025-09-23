@@ -21,22 +21,23 @@ pipeline {
         ]) {
           sh '''
             set -e
+            chmod +x ./infra/*.sh || true
             get_ip() {
               curl -sS -H "Authorization: Bearer $DO_TOKEN" "https://api.digitalocean.com/v2/droplets?per_page=200" \
-                | jq -r --arg NAME "$NAME" ".droplets[]|select(.name==$NAME)|.networks.v4[]|select(.type==\\"public\\")|.ip_address" | head -n1
+                | jq -r --arg NAME "$NAME" '.droplets[] | select(.name==$NAME) | .networks.v4[] | select(.type=="public") | .ip_address' | head -n1
             }
-            REBUILD_FLAG="$(echo "${MSG:-}" | grep -qi "\\[rebuild\\]" && echo yes || echo no)"
+            REBUILD_FLAG="$(echo "${MSG:-}" | grep -qiF '[rebuild]' && echo yes || echo no)"
             IP="$(get_ip)"
             if [ "$REBUILD_FLAG" = "yes" ]; then
               echo "[rebuild] detectado: destruyendo $NAME..."
-              DO_TOKEN="$DO_TOKEN" NAME="$NAME" ./infra/delete-do-droplet.sh || true
+              DO_TOKEN="$DO_TOKEN" NAME="$NAME" bash ./infra/delete-do-droplet.sh || true
               sleep 5
               IP=""
             fi
             if [ -z "$IP" ]; then
               echo "Creando $NAME..."
               REGION="$REGION" SIZE="$SIZE" IMAGE="$IMAGE" NAME="$NAME" DO_TOKEN="$DO_TOKEN" DEPLOY_PASSWORD="$DEPLOY_PASSWORD" \
-                ./infra/create-do-droplet.sh
+                bash ./infra/create-do-droplet.sh
               sleep 10
               IP="$(get_ip)"
             else
