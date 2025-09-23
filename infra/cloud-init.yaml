@@ -1,0 +1,56 @@
+#cloud-config
+hostname: microservice-app
+manage_etc_hosts: true
+ssh_pwauth: true
+
+users:
+  - name: deploy
+    gecos: Deploy User
+    groups: sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+
+chpasswd:
+  list: |
+    deploy:__DEPLOY_PASSWORD__
+  expire: false
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - ufw
+  - jq
+
+write_files:
+  # (intencionalmente vacío para evitar variables sin expandir)
+
+runcmd:
+  # Habilitar autenticación por contraseña en SSH y recargar servicio
+  - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+  - systemctl reload ssh || systemctl restart ssh
+
+  # Preparar keyring para Docker
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - chmod a+r /etc/apt/keyrings/docker.gpg
+  - bash -lc 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" > /etc/apt/sources.list.d/docker.list'
+
+  # Instalar Docker Engine + plugin de compose
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+  # Agregar usuario deploy al grupo docker
+  - usermod -aG docker deploy || true
+
+  # Abrir puertos necesarios (opcional)
+  - ufw allow 22/tcp
+  - ufw allow 3000,8000,8082,8083,9411/tcp
+  - ufw --force enable
+
+  # Crear carpeta estándar de despliegue
+  - mkdir -p /opt/microservice-app
+  - chown -R deploy:deploy /opt/microservice-app
+
+final_message: "Cloud-init finished. Host is ready for microservice app."
