@@ -6,6 +6,8 @@ pipeline {
     REGION = "nyc3"
     SIZE   = "s-1vcpu-2gb"
     IMAGE  = "ubuntu-22-04-x64"
+    APP_REPO_URL = "https://github.com/Gab27x/microservice-app-example.git"
+    APP_BRANCH   = "develop"
   }
   stages {
     stage("Checkout"){ steps { checkout scm } }
@@ -65,6 +67,45 @@ pipeline {
               id -nG deploy | grep -q docker &&
               test -d /opt/microservice-app || exit 1
             '
+          '''
+        }
+      }
+    }
+
+    stage("Deploy App (compose)"){
+      when { anyOf { branch "main"; branch "infra/main" } }
+      steps {
+        withCredentials([string(credentialsId: 'deploy-password', variable: 'DEPLOY_PASSWORD')]) {
+          sh '''
+            set -e
+            IP=$(awk -F= '/DROPLET_IP/ {print $2}' droplet.properties)
+            [ -n "$IP" ] || { echo "No DROPLET_IP"; exit 1; }
+
+            echo "Clonando app ${APP_BRANCH} desde ${APP_REPO_URL}..."
+            rm -rf app-src
+            git clone --depth 1 -b "$APP_BRANCH" "$APP_REPO_URL" app-src
+
+            export SSHPASS="$DEPLOY_PASSWORD"
+            sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" 'mkdir -p /opt/microservice-app'
+
+            echo "Sincronizando fuentes a la VM..."
+            tar -C app-src -czf - . | sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" 'tar -xzf - -C /opt/microservice-app'
+
+            echo "Levantando docker compose en la VM..."
+            sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" '
+              set -e
+              cd /opt/microservice-app
+              docker compose up -d --build
+            '
+
+            echo "Smokes HTTP básicos desde el agente..."
+            for url in "http://$IP:3000" "http://$IP:9411"; do
+              echo "Probing $url ..."
+              curl -fsS -o /dev/null "$url"
+            done
+
+            echo "Estado de contenedores en la VM:"
+            sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" 'docker compose ps'
           '''
         }
       }
