@@ -96,13 +96,31 @@ pipeline {
               set -e
               cd /opt/microservice-app
               docker compose up -d --build
+              # Abrir puertos comunes por si UFW está activo
+              sudo ufw allow 3000/tcp || true
+              sudo ufw allow 80/tcp || true
             '
 
-            echo "Smokes HTTP básicos desde el agente..."
-            for url in "http://$IP:3000" "http://$IP:9411"; do
-              echo "Probing $url ..."
-              curl -fsS -o /dev/null "$url"
-            done
+            echo "Smokes HTTP con reintentos..."
+            wait_on() {
+              url="$1"; name="$2"; attempts=30; sleep_secs=3
+              for i in $(seq 1 "$attempts"); do
+                if curl -fsS -o /dev/null "$url"; then
+                  echo "[OK] $name disponible en $url"
+                  return 0
+                fi
+                echo "[wait] $name no disponible aún ($i/$attempts): $url"; sleep "$sleep_secs"
+              done
+              echo "[FAIL] Timeout esperando $name en $url"; return 1
+            }
+
+            # Descubrir puerto del frontend: probar 3000 y fallback a 80
+            FRONT_OK=no
+            if wait_on "http://$IP:3000" "frontend"; then FRONT_OK=yes; fi
+            if [ "$FRONT_OK" = "no" ]; then
+              wait_on "http://$IP:80" "frontend" || FRONT_OK=no
+            fi
+            wait_on "http://$IP:9411" "zipkin"
 
             echo "Estado de contenedores en la VM:"
             sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" 'docker compose ps'
