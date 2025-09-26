@@ -123,7 +123,7 @@ pipeline {
             wait_on "http://$IP:9411" "zipkin"
 
             echo "Estado de contenedores en la VM:"
-            sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" 'docker compose ps'
+            sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" 'cd /opt/microservice-app && docker compose ps'
           '''
         }
       }
