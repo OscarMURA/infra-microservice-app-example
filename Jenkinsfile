@@ -60,21 +60,23 @@ pipeline {
           
           // Establecer la IP como variable de entorno para el resto del pipeline
           script {
-            def props = readProperties file: 'droplet.properties'
-            env.DROPLET_IP = props.DROPLET_IP
-            env.VM_IP_ADDRESS = props.DROPLET_IP
+            // Leer la IP desde el archivo usando shell en lugar de readProperties
+            def ipValue = sh(script: "awk -F= '/DROPLET_IP/ {print \$2}' droplet.properties", returnStdout: true).trim()
+            env.DROPLET_IP = ipValue
+            env.VM_IP_ADDRESS = ipValue
             
             echo "✅ IP establecida como variable de entorno:"
             echo "   DROPLET_IP = ${env.DROPLET_IP}"
             echo "   VM_IP_ADDRESS = ${env.VM_IP_ADDRESS}"
             
             // Guardar en archivo de propiedades global de Jenkins para reutilización
-            writeFile file: 'jenkins-env.properties', text: """
-DROPLET_IP=${env.DROPLET_IP}
+            writeFile file: 'jenkins-env.properties', text: """DROPLET_IP=${env.DROPLET_IP}
 VM_IP_ADDRESS=${env.DROPLET_IP}
 LAST_DEPLOYMENT_TIME=${new Date().format('yyyy-MM-dd HH:mm:ss')}
 BUILD_NUMBER=${env.BUILD_NUMBER}
 JOB_NAME=${env.JOB_NAME}
+ACTION=${env.MSG?.contains('[rebuild]') ? 'REBUILD' : 'DEPLOY'}
+BRANCH=${env.BRANCH_NAME}
 """
             archiveArtifacts artifacts: "jenkins-env.properties", fingerprint: true
           }
