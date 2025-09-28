@@ -8,8 +8,6 @@ pipeline {
     IMAGE  = "ubuntu-22-04-x64"
     APP_REPO_URL = "https://github.com/Gab27x/microservice-app-example.git"
     APP_BRANCH   = "develop"
-    // Variable para almacenar la IP del droplet
-    DROPLET_IP = ""
   }
   stages {
     stage("Checkout"){ steps { checkout scm } }
@@ -65,20 +63,15 @@ pipeline {
             sh 'cat droplet.properties'
             
             // Leer la IP desde el archivo usando métodos más robustos
-            def ipValue = sh(script: 'grep "DROPLET_IP=" droplet.properties | cut -d"=" -f2', returnStdout: true).trim()
-            
-            echo "🔍 Valor leído de IP: '${ipValue}'"
-            
-            // Verificar que tenemos un valor válido
-            if (ipValue && ipValue != '' && ipValue != 'null') {
+            def ipValue = sh(script: 'grep "^DROPLET_IP=" droplet.properties | cut -d"=" -f2', returnStdout: true).trim()
+            if (ipValue) {
               env.DROPLET_IP = ipValue
               env.VM_IP_ADDRESS = ipValue
-              echo "✅ IP establecida como variable de entorno:"
-              echo "   DROPLET_IP = ${env.DROPLET_IP}"
-              echo "   VM_IP_ADDRESS = ${env.VM_IP_ADDRESS}"
+              echo "✅ DROPLET_IP = ${env.DROPLET_IP}"
             } else {
-              error("❌ No se pudo obtener la IP del archivo droplet.properties. Valor: '${ipValue}'")
+              error("❌ No se pudo obtener DROPLET_IP de droplet.properties")
             }
+
             
             // Guardar en archivo de propiedades global de Jenkins para reutilización
             writeFile file: 'jenkins-env.properties', text: """DROPLET_IP=${env.DROPLET_IP}
