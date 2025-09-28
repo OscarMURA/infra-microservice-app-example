@@ -40,7 +40,7 @@ pipeline {
               echo "Creando $NAME..."
               REGION="$REGION" SIZE="$SIZE" IMAGE="$IMAGE" NAME="$NAME" DO_TOKEN="$DO_TOKEN" DEPLOY_PASSWORD="$DEPLOY_PASSWORD" \
                 bash ./infra/create-do-droplet.sh
-              sleep 10
+              sleep 60
               IP="$(get_ip)"
               echo "Nueva VM creada con IP: $IP"
             else
@@ -117,13 +117,67 @@ BRANCH=${env.BRANCH_NAME}
             echo "🔍 Verificando Docker en $IP..."
             
             export SSHPASS="$DEPLOY_PASSWORD"
+            
+            # Esperar hasta que SSH esté disponible (máximo 5 minutos)
+            echo "⏳ Esperando que SSH esté disponible en $IP..."
+            SSH_READY=false
+            for i in $(seq 1 30); do
+              if sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 deploy@"$IP" 'echo "SSH OK"' 2>/dev/null; then
+                echo "✅ SSH disponible en intento $i/30"
+                SSH_READY=true
+                break
+              fi
+              echo "⏳ Esperando SSH... intento $i/30 (esperando 10s)"
+              sleep 10
+            done
+            
+            if [ "$SSH_READY" = "false" ]; then
+              echo "❌ SSH no disponible después de 5 minutos. La VM podría necesitar más tiempo."
+              exit 1
+            fi
+            
+            # Esperar que cloud-init termine su configuración
+            echo "🔧 Esperando que cloud-init termine la configuración..."
             sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" '
-              docker --version &&
-              docker compose version &&
-              id -nG deploy | grep -q docker &&
-              test -d /opt/microservice-app || exit 1
+              # Esperar hasta que cloud-init haya terminado
+              timeout 300 bash -c "until [ -f /var/lib/cloud/instance/boot-finished ]; do echo \"Esperando cloud-init...\"; sleep 10; done" || echo \"Timeout esperando cloud-init, continuando...\"
             '
-            echo "✅ Docker verificado correctamente en $IP"
+            
+            # Verificar Docker con reintentos
+            echo "🐳 Verificando que Docker esté funcionando..."
+            DOCKER_READY=false
+            for i in $(seq 1 12); do
+              if sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" '
+                docker --version &&
+                docker compose version &&
+                id -nG deploy | grep -q docker &&
+                test -d /opt/microservice-app
+              ' 2>/dev/null; then
+                echo "✅ Docker verificado correctamente en intento $i/12"
+                DOCKER_READY=true
+                break
+              fi
+              echo "⏳ Docker no listo aún... intento $i/12 (esperando 15s)"
+              sleep 15
+            done
+            
+            if [ "$DOCKER_READY" = "false" ]; then
+              echo "❌ Docker no está listo después de 3 minutos adicionales."
+              echo "🔍 Información de diagnóstico:"
+              sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" '
+                echo "=== Verificando usuario deploy ==="
+                whoami
+                id
+                echo "=== Verificando Docker ==="
+                docker --version || echo "Docker no disponible"
+                systemctl status docker || echo "Docker service status unknown"
+                echo "=== Verificando directorio ==="
+                ls -la /opt/ || echo "No se puede listar /opt"
+              ' || true
+              exit 1
+            fi
+            
+            echo "✅ VM completamente lista y Docker verificado en $IP"
           '''
         }
       }
