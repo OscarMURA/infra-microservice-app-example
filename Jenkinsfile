@@ -60,14 +60,25 @@ pipeline {
           
           // Establecer la IP como variable de entorno para el resto del pipeline
           script {
-            // Leer la IP desde el archivo usando shell en lugar de readProperties
-            def ipValue = sh(script: "awk -F= '/DROPLET_IP/ {print \$2}' droplet.properties", returnStdout: true).trim()
-            env.DROPLET_IP = ipValue
-            env.VM_IP_ADDRESS = ipValue
+            // Debug: mostrar contenido del archivo
+            echo "🔍 Contenido de droplet.properties:"
+            sh 'cat droplet.properties'
             
-            echo "✅ IP establecida como variable de entorno:"
-            echo "   DROPLET_IP = ${env.DROPLET_IP}"
-            echo "   VM_IP_ADDRESS = ${env.VM_IP_ADDRESS}"
+            // Leer la IP desde el archivo usando métodos más robustos
+            def ipValue = sh(script: 'grep "DROPLET_IP=" droplet.properties | cut -d"=" -f2', returnStdout: true).trim()
+            
+            echo "🔍 Valor leído de IP: '${ipValue}'"
+            
+            // Verificar que tenemos un valor válido
+            if (ipValue && ipValue != '' && ipValue != 'null') {
+              env.DROPLET_IP = ipValue
+              env.VM_IP_ADDRESS = ipValue
+              echo "✅ IP establecida como variable de entorno:"
+              echo "   DROPLET_IP = ${env.DROPLET_IP}"
+              echo "   VM_IP_ADDRESS = ${env.VM_IP_ADDRESS}"
+            } else {
+              error("❌ No se pudo obtener la IP del archivo droplet.properties. Valor: '${ipValue}'")
+            }
             
             // Guardar en archivo de propiedades global de Jenkins para reutilización
             writeFile file: 'jenkins-env.properties', text: """DROPLET_IP=${env.DROPLET_IP}
