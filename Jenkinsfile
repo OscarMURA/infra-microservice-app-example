@@ -8,6 +8,8 @@ pipeline {
     IMAGE  = "ubuntu-22-04-x64"
     APP_REPO_URL = "https://github.com/Gab27x/microservice-app-example.git"
     APP_BRANCH   = "develop"
+    // Variable para almacenar la IP del droplet
+    DROPLET_IP = ""
   }
   stages {
     stage("Checkout"){ steps { checkout scm } }
@@ -42,12 +44,54 @@ pipeline {
                 bash ./infra/create-do-droplet.sh
               sleep 10
               IP="$(get_ip)"
+              echo "Nueva VM creada con IP: $IP"
             else
               echo "Droplet existente: $IP"
             fi
+            
+            # Guardar IP en archivo de propiedades y como variable de entorno
             echo "DROPLET_IP=$IP" > droplet.properties
+            echo "VM_IP_ADDRESS=$IP" >> droplet.properties
+            
+            # Establecer la IP como variable de entorno para Jenkins
+            echo "Estableciendo DROPLET_IP=$IP como variable de entorno"
           '''
           archiveArtifacts artifacts: "droplet.properties", fingerprint: true
+          
+          // Establecer la IP como variable de entorno para el resto del pipeline
+          script {
+            def props = readProperties file: 'droplet.properties'
+            env.DROPLET_IP = props.DROPLET_IP
+            env.VM_IP_ADDRESS = props.DROPLET_IP
+            
+            echo "✅ IP establecida como variable de entorno:"
+            echo "   DROPLET_IP = ${env.DROPLET_IP}"
+            echo "   VM_IP_ADDRESS = ${env.VM_IP_ADDRESS}"
+            
+            // Guardar en archivo de propiedades global de Jenkins para reutilización
+            writeFile file: 'jenkins-env.properties', text: """
+DROPLET_IP=${env.DROPLET_IP}
+VM_IP_ADDRESS=${env.DROPLET_IP}
+LAST_DEPLOYMENT_TIME=${new Date().format('yyyy-MM-dd HH:mm:ss')}
+BUILD_NUMBER=${env.BUILD_NUMBER}
+JOB_NAME=${env.JOB_NAME}
+"""
+            archiveArtifacts artifacts: "jenkins-env.properties", fingerprint: true
+          }
+        }
+      }
+    }
+
+    stage("Environment Info"){
+      when { anyOf { branch "main"; branch "infra/main" } }
+      steps {
+        script {
+          echo "📋 Variables de entorno disponibles:"
+          echo "   Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+          echo "   Droplet IP: ${env.DROPLET_IP}"
+          echo "   VM Address: ${env.VM_IP_ADDRESS}"
+          echo "   Branch: ${env.BRANCH_NAME}"
+          echo "   Action: ${env.MSG?.contains('[rebuild]') ? 'REBUILD' : 'DEPLOY'}"
         }
       }
     }
@@ -55,11 +99,17 @@ pipeline {
     stage("Smoke Docker en VM"){
       when { anyOf { branch "main"; branch "infra/main" } }
       steps {
+        script {
+          echo "🐳 Verificando Docker en VM: ${env.DROPLET_IP}"
+        }
         withCredentials([string(credentialsId: 'deploy-password', variable: 'DEPLOY_PASSWORD')]) {
           sh '''
             set -e
-            IP=$(awk -F= '/DROPLET_IP/ {print $2}' droplet.properties)
-            [ -n "$IP" ] || { echo "No DROPLET_IP"; exit 1; }
+            # Usar la variable de entorno en lugar de leer archivo
+            IP="${DROPLET_IP}"
+            [ -n "$IP" ] || { echo "❌ No DROPLET_IP en variables de entorno"; exit 1; }
+            echo "🔍 Verificando Docker en $IP..."
+            
             export SSHPASS="$DEPLOY_PASSWORD"
             sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" '
               docker --version &&
@@ -67,6 +117,7 @@ pipeline {
               id -nG deploy | grep -q docker &&
               test -d /opt/microservice-app || exit 1
             '
+            echo "✅ Docker verificado correctamente en $IP"
           '''
         }
       }
@@ -75,13 +126,19 @@ pipeline {
     stage("Deploy App (compose)"){
       when { anyOf { branch "main"; branch "infra/main" } }
       steps {
+        script {
+          echo "🚀 Desplegando aplicación en VM: ${env.DROPLET_IP}"
+          echo "   Repositorio: ${env.APP_REPO_URL}"
+          echo "   Branch: ${env.APP_BRANCH}"
+        }
         withCredentials([string(credentialsId: 'deploy-password', variable: 'DEPLOY_PASSWORD')]) {
           sh '''
             set -e
-            IP=$(awk -F= '/DROPLET_IP/ {print $2}' droplet.properties)
-            [ -n "$IP" ] || { echo "No DROPLET_IP"; exit 1; }
+            # Usar la variable de entorno en lugar de leer archivo
+            IP="${DROPLET_IP}"
+            [ -n "$IP" ] || { echo "❌ No DROPLET_IP en variables de entorno"; exit 1; }
 
-            echo "Clonando app ${APP_BRANCH} desde ${APP_REPO_URL}..."
+            echo "📦 Clonando app ${APP_BRANCH} desde ${APP_REPO_URL}..."
             rm -rf app-src
             git clone --depth 1 -b "$APP_BRANCH" "$APP_REPO_URL" app-src
 
@@ -122,10 +179,97 @@ pipeline {
             fi
             wait_on "http://$IP:9411" "zipkin"
 
-            echo "Estado de contenedores en la VM:"
+            echo "📊 Estado de contenedores en la VM:"
             sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$IP" 'cd /opt/microservice-app && docker compose ps'
+            
+            echo "✅ Despliegue completado en $IP"
           '''
         }
+      }
+    }
+
+    stage("Deployment Summary"){
+      when { anyOf { branch "main"; branch "infra/main" } }
+      steps {
+        script {
+          def action = env.MSG?.contains('[rebuild]') ? 'REBUILD & DEPLOY' : 'DEPLOY'
+          
+          echo """
+╔═══════════════════════════════════════════════════════════════════
+║ 🎉 DESPLIEGUE COMPLETADO EXITOSAMENTE
+╠═══════════════════════════════════════════════════════════════════
+║ 📋 Información del despliegue:
+║    • Acción realizada: ${action}
+║    • VM IP Address: ${env.DROPLET_IP}
+║    • Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}
+║    • Branch: ${env.BRANCH_NAME}
+║    • Timestamp: ${new Date().format('yyyy-MM-dd HH:mm:ss')}
+║
+║ 🌐 Variables de entorno establecidas:
+║    • DROPLET_IP = ${env.DROPLET_IP}
+║    • VM_IP_ADDRESS = ${env.VM_IP_ADDRESS}
+║
+║ 🔗 Accesos a la aplicación:
+║    • Frontend: http://${env.DROPLET_IP}:3000
+║    • Zipkin: http://${env.DROPLET_IP}:9411
+║    • Backup Frontend: http://${env.DROPLET_IP}:80
+║
+║ 📁 Artefactos generados:
+║    • droplet.properties (IP y configuración)
+║    • jenkins-env.properties (variables de entorno)
+╚═══════════════════════════════════════════════════════════════════
+          """
+          
+          // Crear un archivo de resumen final
+          writeFile file: 'deployment-summary.txt', text: """
+DEPLOYMENT SUMMARY
+==================
+Date: ${new Date().format('yyyy-MM-dd HH:mm:ss')}
+Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}
+Branch: ${env.BRANCH_NAME}
+Action: ${action}
+
+VM Information:
+- IP Address: ${env.DROPLET_IP}
+- Name: ${env.NAME}
+- Region: ${env.REGION}
+- Size: ${env.SIZE}
+
+Application URLs:
+- Frontend: http://${env.DROPLET_IP}:3000
+- Zipkin: http://${env.DROPLET_IP}:9411
+- Backup Frontend: http://${env.DROPLET_IP}:80
+
+Environment Variables Set:
+- DROPLET_IP=${env.DROPLET_IP}
+- VM_IP_ADDRESS=${env.VM_IP_ADDRESS}
+"""
+          
+          archiveArtifacts artifacts: "deployment-summary.txt", fingerprint: true
+        }
+      }
+    }
+  }
+  
+  post {
+    always {
+      script {
+        if (env.DROPLET_IP) {
+          echo "🏁 Pipeline finalizado. IP de la VM disponible: ${env.DROPLET_IP}"
+        }
+      }
+    }
+    success {
+      script {
+        echo "✅ Pipeline ejecutado exitosamente!"
+        if (env.DROPLET_IP) {
+          echo "🌐 Tu aplicación está disponible en: http://${env.DROPLET_IP}:3000"
+        }
+      }
+    }
+    failure {
+      script {
+        echo "❌ Pipeline falló. Revisa los logs para más detalles."
       }
     }
   }
