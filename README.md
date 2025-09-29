@@ -27,6 +27,16 @@ Pipeline automatizado de CI/CD para desplegar aplicaciones de microservicios en 
 - **Docker**: Containerización de aplicaciones
 - **Ubuntu 22.04**: SO base de las VMs
 
+## Resultados Stage View Jenkins
+
+<img width="945" height="631" alt="image" src="https://github.com/user-attachments/assets/fb8f3af5-4657-4bd3-9d08-8184cc9feff9" />
+
+## Reporte Pipeline Infraestructura Microservice
+
+<img width="906" height="370" alt="image" src="https://github.com/user-attachments/assets/31105386-3441-4069-babf-a36d49091766" />
+
+
+
 ### Archivos Clave
 ```
 infra-microservice-app-example/
